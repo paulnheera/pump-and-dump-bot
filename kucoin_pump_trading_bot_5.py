@@ -319,11 +319,12 @@ if (len(buy_limit) > 0):
         print("Error: Couldn't get the balance. Possibly no asset recognized.")
     # Place stop limit - Take Profit:
     try:
-        stop_limit = clientTrade.create_limit_order(
+        tp_order = clientTrade.create_market_stop_order(
             symbol = symbol,
             side = 'sell',
             size = format(round_down(balance, minSize)),
-            price = '{:.{prec}f}'.format(askPrice * (1 + take_profit), prec = precision)
+            stop='entry',
+            stopPrice = '{:.{prec}f}'.format(askPrice * (1 + take_profit), prec = precision)
             )
         print("The take profit has been placed! \n")
     except KucoinAPIException as e:
@@ -331,9 +332,23 @@ if (len(buy_limit) > 0):
         # If Filter failure: MIN_NOTIONAL then set a stoploss with entire balance!!!
     except LimitOrderException as e:
         print(e)
+    # Place stop limit - Stop Loss:
+    try:
+        sl_order = clientTrade.create_market_stop_order(
+            symbol = symbol,
+            side = 'sell',
+            size = format(round_down(balance, minSize)),
+            stopPrice = '{:.{prec}f}'.format(askPrice * (1 - stop_loss), prec = precision)
+            )
+        print("The stop placed has been placed! \n")
+    except KucoinAPIException as e:
+        print(e)
+        # If Filter failure: MIN_NOTIONAL then set a stoploss with entire balance!!!
+    except LimitOrderException as e:
+        print(e)
        
     # Start stoploss process:   
-    t4.start()
+    # t4.start()
                 
 # Start process to download trades:
 t5.start()              
