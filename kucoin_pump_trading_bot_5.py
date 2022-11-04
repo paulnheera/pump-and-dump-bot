@@ -15,15 +15,28 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 import time
-import config
-from kucoin.client import Client
+from configparser import ConfigParser
+from kucoin.client import Market , Trade, User
 from kucoin.exceptions import KucoinAPIException , LimitOrderException
 from helper_functions import read_telegram3
 import webbrowser
 import threading
 import feather
+from configparser import ConfigParser
 
-#%% 2. Helper functions
+#%% 2. API Connections
+exchange = 'kucoin'
+config = ConfigParser()
+config.read('config.cfg')
+api_key = config.get(exchange, 'api_key')
+api_secret = config.get(exchange, 'api_secret')
+api_passphrase = config.get(exchange, 'api_passphrase')
+
+clientMarket = Market(url='https://api.kucoin.com')
+clientTrade = Trade(key=api_key, secret=api_secret, passphrase=api_passphrase, is_sandbox=False, url='')
+clientUser = User(key=api_key, secret=api_secret, passphrase=api_passphrase, is_sandbox=False, url='')
+
+#%% 3. Helper functions
 
 def round_down(num,divisor):
     
@@ -39,20 +52,18 @@ def get_opening_price():
     
     start_time = datetime.now() - timedelta(minutes=15)
     start_time = format(start_time.timestamp(),'.0f')
-    klines = client.get_kline_data(symbol, '5min', start_time)
+    klines = clientMarket.get_kline(symbol, '5min',startAt = start_time)
     openPrice = klines[0][1]
     openPrice = float(openPrice)
-    
-    
+      
 def get_ask_price():
     
     global symbol
     global askPrice
     
-    ticker = client.get_ticker(symbol)
+    ticker = clientMarket.get_ticker(symbol)
     askPrice = float(ticker['bestAsk'])
-    
-    
+     
 def open_web_exchange():
     
     global symbol
@@ -66,7 +77,6 @@ def open_web_exchange():
     
     return(webPageOpen)
 
-
 def start_stop_loss():
     
     global symbol
@@ -77,16 +87,16 @@ def start_stop_loss():
     
     while len(market_order) == 0:
        
-        bid = float(client.get_ticker(symbol)['bestBid'])
+        bid = float(clientMarket.get_ticker(symbol)['bestBid'])
         
         print('Price movement: {}%'.format(format((bid/askPrice - 1)*100, '.2f')))
               
         if ((bid/askPrice)-1 < -stop_loss):
             try:
                 # Market order
-                market_order = client.create_market_order(
+                market_order = clientTrade.create_market_order(
                     symbol = symbol,
-                    side = Client.SIDE_SELL,
+                    side = 'sell',
                     size = format(round_down(balance, minSize))
                     )
             except KucoinAPIException as e:
@@ -103,22 +113,17 @@ def get_trades():
     
     for i in range(10):
         # get trades from kucoin
-        curr_trades = client.get_trade_histories(symbol)
+        curr_trades = clientMarket.get_trade_histories(symbol)
         trades.extend(curr_trades)
         print('Got trades!')
         
         time.sleep(2)
-
-#%% 3. Initialise the client
-
-# Initialise the client
-client = Client(config.kucoin_api_key, config.kucoin_api_secret, config.kucoin_api_passphrase)
     
 #%% 4. Get symbols
 
 # Get all available pairs
-df_Symbols = client.get_symbols()
-df_Symbols = pd.DataFrame(df_Symbols)
+res = clientMarket.get_symbol_list()
+df_Symbols = pd.DataFrame(res)
 
 # Filter for where the quote currency is USDT
 df_Symbols = df_Symbols[df_Symbols['quoteCurrency'] == 'USDT']
@@ -151,12 +156,12 @@ symbols = symbols[symbols != 'USDC-USDT']
 symbols = symbols[symbols != 'SDT-USDT']
 symbols = symbols[symbols != 'WIN-USDT']
 symbols = symbols[symbols != 'NU-USDT']
+symbols = symbols[symbols != 'T-USDT']
 
 # Assets
 assets = np.array([re.sub("-USDT","",x) for x in symbols])
 
 #%% 5. Inputs and Global variables
-
 
 # Inputs:
 trade_amount = 10   # <--- UPADATE!!!
@@ -165,7 +170,7 @@ take_profit1 = 0.1
 take_profit2 = 0.2
 stop_loss = 0.1
 
-channel = 'https://t.me/s/kucoin_pumps'
+channel = 'https://t.me/s/channel_de_pump'
 
 # Declare trade variables as global variables
 # Global variables
@@ -196,7 +201,6 @@ t5 = threading.Thread(target=get_trades)
 
 #%% 6. Start Listening:
 
-
 # Reset:
 trade_amount = 10
 target = 0.30
@@ -221,8 +225,8 @@ t3 = threading.Thread(target=open_web_exchange)
 t4 = threading.Thread(target=start_stop_loss)
 t5 = threading.Thread(target=get_trades)
 
+# Listening to Telegram
 while len(asset) == 0:
-        
     # Read the last Telegram message:
     text_msg = read_telegram3(channel) 
     
@@ -237,7 +241,6 @@ while len(asset) == 0:
 
 # get the biggest string in the list
 asset = max(asset, key=len)
-    
 
 # Get symbol info:
 symbol = asset + '-USDT'
@@ -245,7 +248,6 @@ precision = df_Symbols[df_Symbols['symbol'] == symbol]['precision'].values[0]
 tick = df_Symbols[df_Symbols['symbol'] == symbol]['priceIncrement'].values[0]
 minSize = df_Symbols[df_Symbols['symbol'] == symbol]['baseMinSize'].values[0]
 
-    
 # Get the Open price and Ask Price:
 t1.start()
 t2.start()
@@ -265,10 +267,8 @@ if(target > pct_change):
     take_profit = target - pct_change
     
 else:
-    
     # don't trade:
     quantity = 0
-    
     print('Price has moved past the target!')
     
 # ----
@@ -284,33 +284,22 @@ changeRate = 0 # Used to check that there is no pre-pump.
     
     
 # Place a limit buy order: ---------------------------------------------------
-
 # Only by if balance is zero (or some percentage)
-# Only by if price is less than opening price + 5%
+# Only by if price is less than [opening price + 5%]
 try:
-    
-    if (changeRate < 0.4): # Make sure that the coin is not pre-pumped.
-    
-        buy_limit = client.create_limit_order(
+    if(changeRate < 0.4): # Make sure that the coin is not pre-pumped.
+        buy_limit = clientTrade.create_limit_order(
             symbol = symbol,
-            side = client.SIDE_BUY,
-            price = '{:.{prec}f}'.format(askPrice + 2*tick, prec = precision),
-            size = format(quantity) 
+            side = 'buy',
+            size = format(quantity),
+            price = '{:.{prec}f}'.format(askPrice + 2*tick, prec = precision)
             )
-                
-        # Message:
-        print('We have bought {} {} coins at price {} \n'.format(quantity,
-                                                      symbol,
-                                                      format(askPrice,'.8f')))
+        print('We have bought {} {} coins at price {} \n'.format(quantity, symbol, format(askPrice,'.8f')))
     else:
-        
         print("Trade not allowed. Pre-pumped coin. \n")
-
 except KucoinAPIException as e:
     # error handling goes here
     print(e)
-
-    
 except LimitOrderException as e:
     # error handling goes here
     print(e)
@@ -319,47 +308,34 @@ except LimitOrderException as e:
 t3.start()
     
 # Place sell orders: ----------------------------------------------------------
-    
 if (len(buy_limit) > 0):
 # if the buy order got placed:
-   
     # Get balance:     
     try:
-        
-        df_accounts = pd.DataFrame(client.get_accounts())
+        df_accounts = pd.DataFrame(clientUser.get_account_list())
         balance = df_accounts[df_accounts['currency'] == asset]['available'].values[0]
         balance = float(balance)
     except:
         print("Error: Couldn't get the balance. Possibly no asset recognized.")
-    
     # Place stop limit - Take Profit:
     try:
-                
-        stop_limit = client.create_limit_order(
+        stop_limit = clientTrade.create_limit_order(
             symbol = symbol,
-            side = client.SIDE_SELL,
-            price = '{:.{prec}f}'.format(askPrice * (1 + take_profit), prec = precision),
-            size = format(round_down(balance, minSize))
+            side = 'sell',
+            size = format(round_down(balance, minSize)),
+            price = '{:.{prec}f}'.format(askPrice * (1 + take_profit), prec = precision)
             )
-        
-        print("The stop loss has been place! \n")
-        
+        print("The take profit has been placed! \n")
     except KucoinAPIException as e:
-        
         print(e)
-        
         # If Filter failure: MIN_NOTIONAL then set a stoploss with entire balance!!!
-        
     except LimitOrderException as e:
-        
         print(e)
        
-    # Stop loss management:    
-    # Kick off  another process:
+    # Start stoploss process:   
     t4.start()
                 
 # Start process to download trades:
-# get trades from kucoin
 t5.start()              
         
 #%% 7. Save trades data
